@@ -2,6 +2,8 @@
 
 ## Session 1 - Objectif : Dialogue avec une IA pour developer l'idee de projet (architecture, base de données, prompt systeme , etc)
 
+J'utilise gemni pro en ligne pour discuter a propos du projet puis je lui demandes des prompts pour l'agent de coding.
+
 J'ai donnée a Gemini Pro le dossier de cadrage du projet et à l'issu d'un dialogue, permettant de developper plus precisement les idees du projet d'un point de vue technique , je lui ai demandé d'écrire des prompts permettant a l'agent de coding de creer une base solide pour le projet etape par etape. 
 
 Prompt :
