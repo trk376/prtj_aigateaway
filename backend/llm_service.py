@@ -13,7 +13,7 @@ LOCATION = "us-central1" # Région où le modèle est garanti d'être dispo
 vertexai.init(project=PROJECT_ID, location=LOCATION)
 model = GenerativeModel("gemini-2.5-flash") # Version stable générique
 
-def analyser_texte(texte: str) -> list:
+def analyser_texte(texte: str, categories_existantes: list = None) -> list:
     if not texte or len(texte.strip()) == 0:
         return []
 
@@ -28,6 +28,15 @@ def analyser_texte(texte: str) -> list:
     - "score" : un entier entre -5 (très négatif) et 5 (très positif), 0 étant neutre.
     
     Si le texte ne contient aucun retour pertinent, renvoie un tableau vide [].
+    """
+
+    if categories_existantes:
+        categories_str = ", ".join([f'"{c}"' for c in categories_existantes])
+        prompt_systeme += f"""
+    RÈGLE STRICTE SUR LES CATÉGORIES :
+    Voici une liste de catégories existantes : [{categories_str}].
+    Tu DOIS impérativement réutiliser l'une de ces catégories pour le champ "categorie_macro" si le thème s'en rapproche.
+    N'invente un nouveau mot pour "categorie_macro" que si le sujet est impossible à rattacher à celles fournies.
     """
 
     prompt = f"{prompt_systeme}\n\nTexte à analyser :\n{texte_tronque}"

@@ -1,213 +1,319 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
     BarChart,
     Bar,
     XAxis,
     YAxis,
     CartesianGrid,
-    Tooltip,
+    Tooltip as RechartsTooltip,
     ResponsiveContainer,
+    Cell,
+    LineChart,
+    Line,
+    Legend,
+    ReferenceLine
 } from "recharts";
+import { Chart as GoogleChart } from "react-google-charts";
+import { MessageSquareText, TrendingDown, Star, ChevronDown, ChevronUp, ThumbsUp, ThumbsDown, Loader2 } from "lucide-react";
 
-// Interfaces correspondant aux données renvoyées par notre API FastAPI
-interface StatsData {
-    total_feedbacks: number;
-    score_moyen: number;
-}
+// ============================================================================
+// SOUS-COMPOSANTS UI
+// ============================================================================
 
-interface FlawData {
-    categorie_macro: string;
-    score_moyen: number;
-    volume: number;
-}
+const KpiCard = ({ title, value, icon: Icon, colorClass, subtitle }: any) => (
+    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between transition-shadow hover:shadow-md">
+        <div>
+            <p className="text-sm font-semibold text-slate-500 mb-1 tracking-wide uppercase">{title}</p>
+            <div className="flex flex-col items-start">
+                <h3 className="text-4xl font-black text-slate-800 tracking-tight">{value}</h3>
+                {subtitle && <span className="text-sm text-slate-400 mt-1">{subtitle}</span>}
+            </div>
+        </div>
+        <div className={`p-4 rounded-2xl ${colorClass}`}>
+            <Icon className="w-8 h-8" strokeWidth={2} />
+        </div>
+    </div>
+);
 
-export default function DashboardPage() {
-    const [stats, setStats] = useState<StatsData | null>(null);
-    const [topFlaws, setTopFlaws] = useState<FlawData[]>([]);
-    const [loading, setLoading] = useState<boolean>(true);
+const ThemeCard = ({ theme }: { theme: any }) => (
+    <div className={`p-5 rounded-xl border flex flex-col justify-between ${theme.score > 0 ? 'bg-emerald-50/30 border-emerald-100' : 'bg-rose-50/30 border-rose-100'}`}>
+        <div>
+            <div className="flex justify-between items-center mb-3">
+                <h4 className="font-bold text-slate-800 text-lg">{theme.name}</h4>
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-black ${theme.score > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                    }`}>
+                    {theme.score > 0 ? '+' : ''}{theme.score.toFixed(1)}
+                </span>
+            </div>
+            <p className="text-slate-600 italic text-sm leading-relaxed">"{theme.verbatim}"</p>
+        </div>
+    </div>
+);
+
+
+// ============================================================================
+// PAGE PRINCIPALE
+// ============================================================================
+
+export default function Dashboard() {
+    const [showAllThemes, setShowAllThemes] = useState(false);
+
+    // États de chargement et d'erreurs
+    const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    // Exécution au montage du composant côté client
+    // États pour stocker les données de l'API FastAPI
+    const [kpiData, setKpiData] = useState<any>(null);
+    const [themesData, setThemesData] = useState<any[]>([]);
+    const [timelineData, setTimelineData] = useState<any[]>([]);
+
+    // useEffect principal effectuant les 3 fetch
     useEffect(() => {
         const fetchData = async () => {
             try {
-                setLoading(true);
-                // On effectue les deux requêtes HTTP en parallèle pour gratter de la performance
-                const [statsRes, flawsRes] = await Promise.all([
-                    fetch("http://localhost:8000/api/stats"),
-                    fetch("http://localhost:8000/api/top-flaws"),
+                const [kpiRes, themesRes, timelineRes] = await Promise.all([
+                    fetch("http://localhost:8000/api/kpi"),
+                    fetch("http://localhost:8000/api/themes"),
+                    fetch("http://localhost:8000/api/timeline")
                 ]);
 
-                if (!statsRes.ok || !flawsRes.ok) {
-                    throw new Error("L'API backend est injoignable ou renvoie une erreur.");
+                if (!kpiRes.ok || !themesRes.ok || !timelineRes.ok) {
+                    throw new Error("Une erreur s'est produite lors de la communication avec l'API FastAPI.");
                 }
 
-                const statsData: StatsData = await statsRes.json();
-                const flawsData: FlawData[] = await flawsRes.json();
+                const kpis = await kpiRes.json();
+                const themes = await themesRes.json();
+                const timeline = await timelineRes.json();
 
-                setStats(statsData);
-                setTopFlaws(flawsData);
+                setKpiData(kpis);
+                setThemesData(themes);
+                setTimelineData(timeline);
             } catch (err: any) {
-                setError(err.message || "Une erreur inconnue est survenue");
+                setError(err.message || "Erreur de connexion.");
             } finally {
-                setLoading(false);
+                setIsLoading(false);
             }
         };
 
         fetchData();
     }, []);
 
-    // Vue intermédiaire de chargement
-    if (loading) {
+    if (isLoading) {
         return (
-            <div className="min-h-screen bg-neutral-50 flex items-center justify-center font-sans">
-                <div className="text-xl flex flex-col items-center gap-4 text-neutral-500 font-semibold animate-pulse">
-                    <div className="w-10 h-10 border-4 border-neutral-300 border-t-indigo-600 rounded-full animate-spin"></div>
-                    Chargement du Dashboard...
-                </div>
+            <div className="min-h-screen bg-[#f8fafc] flex flex-col items-center justify-center space-y-4">
+                <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
+                <h2 className="text-xl font-bold text-slate-600">Chargement des données Live...</h2>
             </div>
         );
     }
 
-    // Vue d'erreur
     if (error) {
         return (
-            <div className="min-h-screen bg-neutral-50 flex items-center justify-center p-4 font-sans">
-                <div className="bg-red-50 text-red-700 p-8 rounded-2xl shadow-sm border border-red-200 max-w-lg text-center">
-                    <h2 className="text-3xl font-bold mb-3">Erreur de connexion</h2>
-                    <p className="font-medium text-red-600 mb-6">{error}</p>
-                    <div className="text-sm bg-white p-4 rounded-xl border border-red-100 text-left text-neutral-600 space-y-2">
-                        <p><strong>Aide au débug :</strong></p>
-                        <ul className="list-disc list-inside">
-                            <li>L'API FastAPI est-elle lancée sur <code className="bg-neutral-100 px-1 py-0.5 rounded">http://localhost:8000</code> ?</li>
-                            <li>Avez-vous bien mis <code className="bg-neutral-100 px-1 py-0.5 rounded">allow_origins=["*"]</code> dans le CORS ?</li>
-                        </ul>
-                    </div>
+            <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center">
+                <div className="bg-red-50 p-6 rounded-xl border border-red-200 max-w-lg text-center">
+                    <h2 className="text-red-600 font-bold text-xl mb-2">Erreur Serveur</h2>
+                    <p className="text-red-500">{error}</p>
                 </div>
             </div>
         );
     }
 
-    // Écran principal
+    // ==========================================================================
+    // FORMATAGE LOGIQUE DES DONNÉES REÇUES POUR LES COMPOSANTS
+    // ==========================================================================
+
+    // 1. Sankey Data : On reconstruit les nœuds.
+    const volumePositif = themesData.filter(t => t.score_moyen > 0).reduce((acc, t) => acc + t.volume, 0);
+    const volumeNegatif = themesData.filter(t => t.score_moyen <= 0).reduce((acc, t) => acc + t.volume, 0);
+
+    const SANKEY_DATA = [
+        ["De", "Vers", "Volume"],
+        ["Total Avis", "Positifs", volumePositif || 0.1], // Petite triche 0.1 pour éviter un crash lib si vide
+        ["Total Avis", "Négatifs", volumeNegatif || 0.1],
+    ];
+
+    themesData.forEach(t => {
+        if (t.score_moyen > 0) {
+            SANKEY_DATA.push(["Positifs", t.categorie_macro, t.volume]);
+        } else {
+            SANKEY_DATA.push(["Négatifs", t.categorie_macro, t.volume]);
+        }
+    });
+
+    // 2. BarChart Horizontal (Themes)
+    // Recharts gère tout seul la liste, on mappe juste les clés
+    const BAR_DATA = themesData.map(t => ({
+        category: t.categorie_macro,
+        score: t.score_moyen
+    }));
+
+    // 3. Tops et Flops
+    // On crée un format homogène pour notre Composant <ThemeCard />
+    const formattedThemes = themesData.map((t, idx) => ({
+        id: idx,
+        name: t.categorie_macro,
+        score: t.score_moyen,
+        type: t.score_moyen > 0 ? "positif" : "negatif",
+        verbatim: t.exemple_representatif || "Aucun exemple brut disponible."
+    }));
+
+    const POSITIFS = formattedThemes.filter(t => t.score > 0).sort((a, b) => b.score - a.score);
+    const NEGATIFS = formattedThemes.filter(t => t.score <= 0).sort((a, b) => a.score - b.score);
+
+    const displayPositifs = showAllThemes ? POSITIFS : POSITIFS.slice(0, 3);
+    const displayNegatifs = showAllThemes ? NEGATIFS : NEGATIFS.slice(0, 3);
+
+
     return (
-        <div className="min-h-screen bg-neutral-50 text-neutral-800 p-8 font-sans selection:bg-indigo-100 selection:text-indigo-900">
-            <div className="max-w-6xl mx-auto space-y-10">
+        <div className="min-h-screen bg-[#f8fafc] p-4 md:p-8 font-sans">
+            <div className="max-w-7xl mx-auto space-y-8">
 
-                {/* En-tête de page */}
-                <header>
-                    <h1 className="text-4xl font-extrabold text-neutral-900 tracking-tight">
-                        Customer Intelligence
-                    </h1>
-                    <p className="text-neutral-500 mt-2 text-lg font-medium">
-                        Analyse IA des retours utilisateurs en temps réel
-                    </p>
-                </header>
-
-                {/* --- CARDS DE KPI --- */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-white rounded-3xl shadow-[0_2px_20px_-8px_rgba(0,0,0,0.1)] border border-neutral-100 p-8 flex flex-col justify-center transition-transform hover:-translate-y-1 duration-300">
-                        <h3 className="text-neutral-400 text-sm font-bold uppercase tracking-widest mb-3">
-                            Total des avis analysés
-                        </h3>
-                        <div className="text-6xl font-black text-indigo-600 tracking-tighter">
-                            {stats?.total_feedbacks.toLocaleString("fr-FR")}
-                        </div>
-                        <div className="mt-2 text-sm text-indigo-600/70 font-medium">
-                            Avis correctement traités
-                        </div>
-                    </div>
-
-                    <div className="bg-white rounded-3xl shadow-[0_2px_20px_-8px_rgba(0,0,0,0.1)] border border-neutral-100 p-8 flex flex-col justify-center transition-transform hover:-translate-y-1 duration-300">
-                        <h3 className="text-neutral-400 text-sm font-bold uppercase tracking-widest mb-3">
-                            Score moyen global
-                        </h3>
-                        <div className="flex items-baseline gap-2">
-                            <span className={`text-6xl font-black tracking-tighter ${(stats?.score_moyen ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
-                                }`}>
-                                {(stats?.score_moyen ?? 0) > 0 ? "+" : ""}
-                                {stats?.score_moyen !== undefined ? stats.score_moyen : "-"}
-                            </span>
-                            <span className="text-neutral-300 font-bold text-2xl tracking-tighter">/ 5</span>
-                        </div>
-                        <div className="mt-2 text-sm text-neutral-400 font-medium">
-                            {((stats?.score_moyen ?? 0) >= 0 ? "Sentiment majoritairement positif" : "Alerte : Sentiment négatif dominant")}
-                        </div>
-                    </div>
+                {/* En-tête de la page */}
+                <div>
+                    <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">Analyse des Feedbacks</h1>
+                    <p className="text-slate-500 mt-2 text-lg">Dashboard connecté en temps réel via l'API FastAPI.</p>
                 </div>
 
-                {/* --- GRAPHIQUE RECHARTS --- */}
-                <div className="bg-white rounded-3xl shadow-[0_2px_20px_-8px_rgba(0,0,0,0.1)] border border-neutral-100 p-8 overflow-hidden">
-                    <div className="mb-8">
-                        <h2 className="text-2xl font-extrabold text-neutral-900 tracking-tight">
-                            Alerte: Pires catégories
-                        </h2>
-                        <p className="text-neutral-500 text-sm mt-1 font-medium">
-                            Défauts récurrents pénalisant l'expérience (&ge; 5 occurrences)
-                        </p>
+                {/* 1. Kpi Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <KpiCard
+                        title="Volume total traité"
+                        value={kpiData?.total_avis || 0}
+                        icon={MessageSquareText}
+                        colorClass="bg-blue-50 text-blue-600"
+                    />
+                    <KpiCard
+                        title="Score moyen global"
+                        value={kpiData?.score_moyen > 0 ? `+${kpiData?.score_moyen}` : kpiData?.score_moyen}
+                        subtitle="Échelle [-5, +5]"
+                        icon={Star}
+                        colorClass="bg-amber-50 text-amber-500"
+                    />
+                    <KpiCard
+                        title="Taux de frustration"
+                        value={`${kpiData?.taux_frustration || 0}%`}
+                        subtitle="Avis marqués négativement"
+                        icon={TrendingDown}
+                        colorClass="bg-rose-50 text-rose-600"
+                    />
+                </div>
+
+                {/* 2. Vue Agrégée (Graphiques) */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                    {/* Sankey : Répartition par thèmes */}
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-xl font-bold text-slate-800 mb-2">Flux de classification</h2>
+                        <p className="text-sm text-slate-500 mb-6">Répartition de l'ensemble de la Data.</p>
+                        <div className="h-[300px] w-full">
+                            <GoogleChart
+                                chartType="Sankey"
+                                width="100%"
+                                height="100%"
+                                data={SANKEY_DATA}
+                                options={{
+                                    sankey: {
+                                        node: { colors: ["#94a3b8", "#10b981", "#fb7185", "#3b82f6", "#f59e0b", "#6366f1", "#14b8a6"], label: { color: "#334155", bold: true, fontSize: 13 } },
+                                        link: { colorMode: 'gradient', fillOpacity: 0.4 }
+                                    }
+                                }}
+                            />
+                        </div>
                     </div>
 
-                    {topFlaws.length === 0 ? (
-                        <div className="flex justify-center items-center h-72 text-neutral-400 italic bg-neutral-50/50 rounded-2xl border border-dashed border-neutral-200">
-                            Absence de données (ou volume par catégorie insuffisant).
-                        </div>
-                    ) : (
-                        <div className="h-80 w-full mt-4">
+                    {/* BarChart : Sentiment Moyen par thème */}
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-xl font-bold text-slate-800 mb-6">Sentiment moyen par thème</h2>
+                        <div className="h-[300px] w-full">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart
-                                    data={topFlaws}
-                                    margin={{ top: 20, right: 30, left: 0, bottom: 5 }}
-                                >
-                                    <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#E5E7EB" />
-                                    <XAxis
-                                        dataKey="categorie_macro"
-                                        axisLine={false}
-                                        tickLine={false}
-                                        tick={{ fill: '#6B7280', fontSize: 13, fontWeight: 600 }}
-                                        dy={16}
-                                    />
-                                    <YAxis
-                                        // Axe Y forcé de -5 à 0 pour bien illustrer les scores négatifs, 
-                                        // ou de -5 à 5 selon ta préférence.
-                                        domain={[-5, 5]}
-                                        axisLine={false}
-                                        tickLine={false}
-                                        tick={{ fill: '#9CA3AF', fontWeight: 500 }}
-                                        dx={-10}
-                                    />
-                                    <Tooltip
-                                        cursor={{ fill: '#F9FAFB' }}
-                                        contentStyle={{
-                                            borderRadius: '16px',
-                                            border: '1px solid #F3F4F6',
-                                            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                                            padding: '16px',
-                                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                            backdropFilter: 'blur(8px)'
-                                        }}
-                                        labelStyle={{ fontWeight: '800', color: '#111827', marginBottom: '8px', textTransform: 'capitalize' }}
-                                        formatter={(value: number, name: string, props: any) => [
-                                            <span key="score" className="font-bold text-rose-600">{value} / 5</span>,
-                                            'Score moyen'
-                                        ]}
-                                    />
-                                    <Bar
-                                        dataKey="score_moyen"
-                                        fill="#F43F5E"
-                                        // Coins arrondis sympas sur les barres
-                                        radius={[8, 8, 8, 8]}
-                                        barSize={48}
-                                        // Animation native Recharts au chargement
-                                        isAnimationActive={true}
-                                        animationDuration={1500}
-                                        animationEasing="ease-out"
-                                    />
+                                <BarChart layout="vertical" data={BAR_DATA} margin={{ top: 0, right: 30, left: 40, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                                    <XAxis type="number" domain={[-5, 5]} stroke="#94a3b8" tick={{ fontSize: 12 }} />
+                                    <YAxis dataKey="category" type="category" stroke="#475569" fontWeight={600} tick={{ fontSize: 12 }} width={90} />
+                                    <RechartsTooltip cursor={{ fill: '#f8fafc' }} contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0' }} />
+                                    <ReferenceLine x={0} stroke="#cbd5e1" strokeWidth={2} />
+                                    <Bar dataKey="score" radius={[0, 4, 4, 0]} barSize={20}>
+                                        {BAR_DATA.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.score > 0 ? '#10b981' : '#f43f5e'} />
+                                        ))}
+                                    </Bar>
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
-                    )}
+                    </div>
                 </div>
+
+                {/* 3. Section Expandable Top Positifs & Négatifs */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 bg-white">
+                        <h2 className="text-2xl font-bold text-slate-800">Les Tops et les Flops détaillés</h2>
+                        <p className="text-slate-500 mt-1">Données issues directement de la base SQLite.</p>
+                    </div>
+
+                    <div className="p-6">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+                            {/* Colonne POSITIFS */}
+                            <div className="space-y-4">
+                                <div className="flex items-center space-x-2 pb-2 border-b-2 border-emerald-100">
+                                    <ThumbsUp className="w-5 h-5 text-emerald-500" />
+                                    <h3 className="text-lg font-bold text-emerald-700">Champions (Positif)</h3>
+                                </div>
+                                <div className="grid gap-4">
+                                    {displayPositifs.length > 0 ? displayPositifs.map(theme => <ThemeCard key={theme.id} theme={theme} />) : <p className="text-slate-400 italic">Aucun aspect positif.</p>}
+                                </div>
+                            </div>
+
+                            {/* Colonne NÉGATIFS */}
+                            <div className="space-y-4">
+                                <div className="flex items-center space-x-2 pb-2 border-b-2 border-rose-100">
+                                    <ThumbsDown className="w-5 h-5 text-rose-500" />
+                                    <h3 className="text-lg font-bold text-rose-700">Points Critiques (Négatif)</h3>
+                                </div>
+                                <div className="grid gap-4">
+                                    {displayNegatifs.length > 0 ? displayNegatifs.map(theme => <ThemeCard key={theme.id} theme={theme} />) : <p className="text-slate-400 italic">Aucun aspect négatif.</p>}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 4. Bouton "Voir le reste" */}
+                        {(POSITIFS.length > 3 || NEGATIFS.length > 3) && (
+                            <div className="mt-8 flex justify-center">
+                                <button
+                                    onClick={() => setShowAllThemes(!showAllThemes)}
+                                    className="flex items-center space-x-2 bg-slate-50 hover:bg-slate-100 text-slate-600 font-semibold px-6 py-3 rounded-full border border-slate-200 transition-colors"
+                                >
+                                    <span>{showAllThemes ? "Réduire la liste" : "Voir tous les thèmes"}</span>
+                                    {showAllThemes ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 5. Tendance Temporelle (LineChart) */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                    <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+                        <TrendingDown className="w-5 h-5 text-slate-400" />
+                        Évolution Temporelle Globale
+                    </h2>
+                    <div className="h-[300px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={timelineData} margin={{ top: 5, right: 20, left: -20, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                                <XAxis dataKey="date" stroke="#64748b" tick={{ fontSize: 13 }} />
+                                <YAxis domain={[-5, 5]} stroke="#64748b" tick={{ fontSize: 13 }} />
+                                <RechartsTooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                                <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px' }} />
+                                <ReferenceLine y={0} stroke="#cbd5e1" strokeWidth={2} strokeDasharray="4 4" />
+                                <Line type="monotone" name="Score Global Moyen" dataKey="score_moyen" stroke="#3b82f6" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+
             </div>
         </div>
     );

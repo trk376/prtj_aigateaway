@@ -4,113 +4,164 @@ from typing import List, Dict, Any
 import sqlite3
 
 # Création de l'application FastAPI
-app = FastAPI(title="Feedbacks Dashboard API")
+app = FastAPI(title="Dashboard Feedbacks API", description="API servant les données aggrégées pour le dashboard React.")
 
 # 1. CONTRAINTE : Configuration CORS OBLIGATOIRE
-# Permet au front-end React (qui tourne sur un autre port, ex: localhost:3000) 
-# de faire des requêtes vers FastAPI sans être bloqué par le navigateur.
+# Permet au front-end Next.js (qui tourne sur localhost:3000) 
+# de faire des requêtes vers FastAPI (localhost:8000) sans erreur CORS.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Autorise toutes les origines
+    allow_origins=["*"],  # En production, mettre ["http://localhost:3000"]
     allow_credentials=True,
-    allow_methods=["*"],  # Autorise toutes les méthodes (GET, POST...)
-    allow_headers=["*"],  # Autorise tous les headers
+    allow_methods=["*"],  
+    allow_headers=["*"], 
 )
 
 DATABASE_NAME = "data/database.db"
 
 def get_db_connection():
     """
-    Ouvre et retourne une connexion à la base de données SQLite.
-    Configure row_factory pour récupérer les résultats sous forme de dictionnaire (clé-valeur)
-    au lieu de simples tuples, facilitant ainsi la sérialisation en JSON par FastAPI.
+    Ouvre et retourne une connexion SQLite.
+    row_factory pour sérialiser en objet/dictionnaire au lieu de tuple natif.
     """
     conn = sqlite3.connect(DATABASE_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
-@app.get("/api/stats", response_model=Dict[str, Any])
-def get_global_stats():
+# ==============================================================================
+# ENDPOINT 1 : KPI OBERVAUX
+# ==============================================================================
+@app.get("/api/kpi", response_model=Dict[str, Any])
+def get_kpi():
     """
-    Retourne le nombre total de feedbacks analysés et la moyenne globale 
-    de tous les scores attribués aux différents aspects.
+    Retourne : total_avis, score_moyen, taux_frustration
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         
-        # Requête SQL : 
-        # - COUNT(DISTINCT feedback_id) : compte les feedbacks uniques ayant au moins un aspect
-        # - AVG(score) : calcule la moyenne de la colonne "score" sur toutes les lignes
+        # Le taux de frustration est le % d'analyses où le score est < 0
         cursor.execute("""
             SELECT 
-                COUNT(DISTINCT feedback_id) as total_feedbacks_analyses,
-                AVG(score) as moyenne_globale
+                COUNT(*) as total_analyses,
+                AVG(score) as score_moyen,
+                SUM(CASE WHEN score < 0 THEN 1 ELSE 0 END) as avis_frustres
             FROM aspects_analyses
         """)
         row = cursor.fetchone()
         
-        # Si la base est encore vide, avg_score vaudra None
-        avg = row["moyenne_globale"]
+        if not row or row["total_analyses"] == 0:
+            return {"total_avis": 0, "score_moyen": 0, "taux_frustration": 0}
+            
+        total = row["total_analyses"]
+        score_moyen = row["score_moyen"]
+        avis_frustres = row["avis_frustres"] or 0
+        
+        taux_frustration = (avis_frustres / total) * 100
         
         return {
-            "total_feedbacks": row["total_feedbacks_analyses"],
-            "score_moyen": round(avg, 2) if avg is not None else 0
+            "total_avis": total,
+            "score_moyen": round(score_moyen, 1) if score_moyen is not None else 0,
+            "taux_frustration": round(taux_frustration, 1)
         }
     except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=f"Erreur base de données : {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
     finally:
-        # 3. CONTRAINTE : Fermeture propre de la connexion garantie par le fully
         conn.close()
 
-@app.get("/api/top-flaws", response_model=List[Dict[str, Any]])
-def get_top_flaws():
+
+# ==============================================================================
+# ENDPOINT 2 : THEMES ET SENTIMENTS AVEC EXEMPLE
+# ==============================================================================
+@app.get("/api/themes", response_model=List[Dict[str, Any]])
+def get_themes():
     """
-    Retourne les 5 pires catégories (celles ayant le pire score moyen).
+    Retourne la liste des thèmes agrégés avec leur volume, score moyen,
+    et un exemple représentatif de texte brut extrait via JOIN.
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         
-        # Requête SQL expliquée (Contrainte 2) :
-        # - GROUP BY categorie_macro : on rassemble les lignes par catégorie (ex: livraison, produit...)
-        # - AVG(score) as score_moyen : on calcule la moyenne des scores du groupe
-        # - COUNT(*) as volume : on calcule le nombre de mentions pour ce groupe
-        # - HAVING volume >= 5 : filtre post-groupage pour ignorer les catégories citées moins de 5 fois (évite qu'un seul avis en -5 ruine les stats)
-        # - ORDER BY score_moyen ASC : on trie du du plus petit (pire) au plus grand.
-        # - LIMIT 5 : on ne garde que le top 5 des pires aspects
+        # Astuce SQL (SQLite) : MIN(f.texte_brut) ou MAX() permet de récupérer
+        # facilement au pif une chaîne de la jointure qui correspond au groupe 
+        # sans avoir à faire de sous-requête complexe FIRST_VALUE().
+        # On regroupe d'abord dans aspects_analyses, et la jointure relie l'Id parent.
         cursor.execute("""
             SELECT 
-                categorie_macro,
-                AVG(score) as score_moyen,
-                COUNT(*) as volume
-            FROM aspects_analyses
-            GROUP BY categorie_macro
-            HAVING volume >= 5
-            ORDER BY score_moyen ASC
-            LIMIT 5
+                a.categorie_macro,
+                COUNT(a.id) as volume,
+                AVG(a.score) as score_moyen,
+                MAX(f.texte_brut) as exemple_representatif
+            FROM aspects_analyses a
+            INNER JOIN feedbacks f ON a.feedback_id = f.id
+            GROUP BY a.categorie_macro
+            ORDER BY score_moyen DESC
         """)
+        
         rows = cursor.fetchall()
         
-        # Transformation des résultats bruts sqlite3.Row en dict classique
-        flaws = []
+        result = []
         for row in rows:
-            flaws.append({
+            result.append({
                 "categorie_macro": row["categorie_macro"],
-                "score_moyen": round(row["score_moyen"], 2),
-                "volume": row["volume"]
+                "volume": row["volume"],
+                "score_moyen": round(row["score_moyen"], 1),
+                "exemple_representatif": row["exemple_representatif"]
             })
             
-        return flaws
+        return result
         
     except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=f"Erreur base de données : {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
     finally:
-        # 3. CONTRAINTE : Fermeture propre
         conn.close()
 
-# Si tu lances `python3 api.py` localement, le serveur se démarre
+
+# ==============================================================================
+# ENDPOINT 3 : TENDANCE TEMPORELLE
+# ==============================================================================
+@app.get("/api/timeline", response_model=List[Dict[str, Any]])
+def get_timeline():
+    """
+    Regroupe le score moyen de tous les avis par jour.
+    """
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        
+        # SQLite: STRFTIME('%Y-%m-%d', date) permet d'arrondir ou formatter la date.
+        # Ici on suppose que feedbacks.date_creation est un format ISO standard.
+        cursor.execute("""
+            SELECT 
+                STRFTIME('%Y-%m-%d', f.date_creation) as jour,
+                AVG(a.score) as score_moyen,
+                COUNT(a.id) as volume_jour
+            FROM aspects_analyses a
+            INNER JOIN feedbacks f ON a.feedback_id = f.id
+            GROUP BY jour
+            ORDER BY jour ASC
+        """)
+        
+        rows = cursor.fetchall()
+        
+        timeline = []
+        for row in rows:
+            timeline.append({
+                "date": row["jour"],
+                "score_moyen": round(row["score_moyen"], 1) if row["score_moyen"] is not None else 0,
+                "volume": row["volume_jour"]
+            })
+            
+        return timeline
+        
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=500, detail=f"Erreur DB : {e}")
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     import uvicorn
-    # Démarre l'API sur http://localhost:8000
+    # Démarre l'API en local sur le port 8000
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
