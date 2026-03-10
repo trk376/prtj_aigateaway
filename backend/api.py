@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import sqlite3
 
 # Création de l'application FastAPI
@@ -28,26 +28,51 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+
+def _build_date_clause(start_date: Optional[str], end_date: Optional[str], date_col: str = "f.date_creation") -> tuple[str, list]:
+    """
+    Construit dynamiquement la clause WHERE pour le filtrage par date.
+    Retourne (clause_sql, params).
+    """
+    clauses = []
+    params = []
+    if start_date:
+        clauses.append(f"{date_col} >= ?")
+        params.append(start_date)
+    if end_date:
+        clauses.append(f"{date_col} <= ?")
+        params.append(end_date)
+    
+    if clauses:
+        return " AND ".join(clauses), params
+    return "", []
+
+
 # ==============================================================================
-# ENDPOINT 1 : KPI OBERVAUX
+# ENDPOINT 1 : KPI OBSERVAUX
 # ==============================================================================
 @app.get("/api/kpi", response_model=Dict[str, Any])
-def get_kpi():
+def get_kpi(start_date: Optional[str] = Query(None), end_date: Optional[str] = Query(None)):
     """
     Retourne : total_avis, score_moyen, taux_frustration
+    Filtrable par start_date et end_date (format YYYY-MM-DD).
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         
-        # Le taux de frustration est le % d'analyses où le score est < 0
-        cursor.execute("""
+        date_clause, params = _build_date_clause(start_date, end_date)
+        where_sql = f"WHERE {date_clause}" if date_clause else ""
+        
+        cursor.execute(f"""
             SELECT 
                 COUNT(*) as total_analyses,
-                AVG(score) as score_moyen,
-                SUM(CASE WHEN score < 0 THEN 1 ELSE 0 END) as avis_frustres
-            FROM aspects_analyses
-        """)
+                AVG(a.score) as score_moyen,
+                SUM(CASE WHEN a.score < 0 THEN 1 ELSE 0 END) as avis_frustres
+            FROM aspects_analyses a
+            INNER JOIN feedbacks f ON a.feedback_id = f.id
+            {where_sql}
+        """, params)
         row = cursor.fetchone()
         
         if not row or row["total_analyses"] == 0:
@@ -74,20 +99,20 @@ def get_kpi():
 # ENDPOINT 2 : THEMES ET SENTIMENTS AVEC EXEMPLE
 # ==============================================================================
 @app.get("/api/themes", response_model=List[Dict[str, Any]])
-def get_themes():
+def get_themes(start_date: Optional[str] = Query(None), end_date: Optional[str] = Query(None)):
     """
     Retourne la liste des thèmes agrégés avec leur volume, score moyen,
     et un exemple représentatif de texte brut extrait via JOIN.
+    Filtrable par start_date et end_date.
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         
-        # Astuce SQL (SQLite) : MIN(f.texte_brut) ou MAX() permet de récupérer
-        # facilement au pif une chaîne de la jointure qui correspond au groupe 
-        # sans avoir à faire de sous-requête complexe FIRST_VALUE().
-        # On regroupe d'abord dans aspects_analyses, et la jointure relie l'Id parent.
-        cursor.execute("""
+        date_clause, params = _build_date_clause(start_date, end_date)
+        where_sql = f"WHERE {date_clause}" if date_clause else ""
+        
+        cursor.execute(f"""
             SELECT 
                 a.categorie_macro,
                 COUNT(a.id) as volume,
@@ -95,9 +120,10 @@ def get_themes():
                 MAX(f.texte_brut) as exemple_representatif
             FROM aspects_analyses a
             INNER JOIN feedbacks f ON a.feedback_id = f.id
+            {where_sql}
             GROUP BY a.categorie_macro
             ORDER BY score_moyen DESC
-        """)
+        """, params)
         
         rows = cursor.fetchall()
         
@@ -122,26 +148,29 @@ def get_themes():
 # ENDPOINT 3 : TENDANCE TEMPORELLE
 # ==============================================================================
 @app.get("/api/timeline", response_model=List[Dict[str, Any]])
-def get_timeline():
+def get_timeline(start_date: Optional[str] = Query(None), end_date: Optional[str] = Query(None)):
     """
     Regroupe le score moyen de tous les avis par jour.
+    Filtrable par start_date et end_date.
     """
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         
-        # SQLite: STRFTIME('%Y-%m-%d', date) permet d'arrondir ou formatter la date.
-        # Ici on suppose que feedbacks.date_creation est un format ISO standard.
-        cursor.execute("""
+        date_clause, params = _build_date_clause(start_date, end_date)
+        where_sql = f"WHERE {date_clause}" if date_clause else ""
+        
+        cursor.execute(f"""
             SELECT 
                 STRFTIME('%Y-%m-%d', f.date_creation) as jour,
                 AVG(a.score) as score_moyen,
                 COUNT(a.id) as volume_jour
             FROM aspects_analyses a
             INNER JOIN feedbacks f ON a.feedback_id = f.id
+            {where_sql}
             GROUP BY jour
             ORDER BY jour ASC
-        """)
+        """, params)
         
         rows = cursor.fetchall()
         

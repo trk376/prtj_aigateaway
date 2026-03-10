@@ -83,8 +83,15 @@ def analyser_texte_brut(texte: str) -> list[dict]:
         return []
 
     prompt = f"""
-    Extrais les aspects abordés dans ce feedback, ainsi que le sentiment associé.
+    Extrais les aspects abordés dans ce feedback client, ainsi que le sentiment associé.
     Ne crée PAS de 'categorie_macro'.
+    
+    RÈGLE CRITIQUE SUR LE SCORE :
+    Pour chaque aspect, attribue un `score` OBLIGATOIRE entre -5 (très négatif/colère) et +5 (très positif/compliment).
+    - Un avis positif (compliment, satisfaction, remerciement) DOIT avoir un score > 0 (entre +1 et +5).
+    - Un avis négatif (plainte, frustration, colère) DOIT avoir un score < 0 (entre -1 et -5).
+    - Un avis neutre ou factuel = score 0.
+    Ne renvoie JAMAIS de texte pour le score, UNIQUEMENT un entier.
     
     Format JSON de réponse exigé :
     [
