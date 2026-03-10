@@ -130,32 +130,36 @@ def extraire_aspects_batch(avis_batch: list[dict]) -> dict:
     return resultats
 
 
-# --- PHASE 2 : REDUCE (Création de la taxonomie unifiée) ---
-def generer_taxonomie(liste_aspects_bruts: list[str]) -> dict:
+# --- PHASE 2 : REDUCE (Embeddings → KMeans → Labellisation LLM) ---
+
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans
+import numpy as np
+import logging
+
+# Chargement du modèle d'embeddings (une seule fois au niveau du module)
+logging.info("[REDUCE] Chargement du modèle d'embeddings all-MiniLM-L6-v2...")
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+logging.info("[REDUCE] Modèle d'embeddings chargé ✓")
+
+MAX_CLUSTERS = 7  # Nombre maximum de catégories macro
+
+
+def _labelliser_cluster(mots_du_cluster: list[str]) -> str:
     """
-    Prend tous les 'aspect_exact' extraits du batch, et fait un seul appel LLM
-    pour les mapper vers des 'categorie_macro' unifiées.
+    Fait un appel LLM très simple pour nommer un cluster de mots-clés.
+    Retourne un nom de catégorie en UN seul mot, minuscules, sans accents.
     """
-    if not liste_aspects_bruts:
-        return {}
-        
-    # On déduplique la liste Python brute avant envoi
-    aspects_uniques = list(set(liste_aspects_bruts))
+    mots_str = ", ".join(mots_du_cluster)
     
     prompt = f"""
-    Voici une liste d'aspects bruts extraits de feedbacks clients :
-    {json.dumps(aspects_uniques, ensure_ascii=False)}
+    Voici des mots-clés extraits d'avis clients qui parlent tous de la même thématique :
+    [{mots_str}]
     
-    TA TÂCHE : Regrouper ces aspects bruts sous des 'categorie_macro' unifiées.
-    - Les 'categorie_macro' doivent être génériques (ex: "livraison", "prix", "application_mobile", "service_client").
-    - Elles doivent être écrites en minuscules, sans accents de préférence.
+    Donne-moi UN SEUL MOT générique (en minuscules, sans accents) qui résume ce groupe.
+    Exemples de bons noms : "tarifs", "livraison", "application", "securite", "technique", "service".
     
-    Format JSON de réponse exigé (un dictionnaire qui mappe chaque aspect brut EXACT à sa macro-catégorie) :
-    {{
-       "aspect brut 1": "categorie_macro",
-       "aspect brut 2": "categorie_macro"
-    }}
-    Ne modifie SURTOUT PAS les clés (les aspects bruts), elles doivent correspondre exactement à l'entrée.
+    Réponds UNIQUEMENT avec le mot, rien d'autre. Format JSON : {{"label": "ton_mot"}}
     """
     
     try:
@@ -163,7 +167,63 @@ def generer_taxonomie(liste_aspects_bruts: list[str]) -> dict:
             prompt,
             generation_config=GenerationConfig(temperature=0.0, response_mime_type="application/json")
         )
-        return json.loads(response.text)
+        result = json.loads(response.text)
+        return result.get("label", "divers").lower().strip()
     except Exception as e:
-        print(f"[ERREUR TAXONOMIE AI] {e}")
+        print(f"[ERREUR LABELLISATION] {e}")
+        return "divers"
+
+
+def generer_taxonomie(liste_aspects_bruts: list[str]) -> dict:
+    """
+    Phase REDUCE hybride : Embeddings → KMeans → Labellisation LLM.
+    
+    1. Vectorise les aspects bruts avec sentence-transformers (all-MiniLM-L6-v2).
+    2. Regroupe les vecteurs en N clusters avec KMeans (N ≤ MAX_CLUSTERS).
+    3. Pour chaque cluster, demande au LLM de nommer la catégorie en UN mot.
+    4. Retourne { "aspect_brut": "categorie_macro", ... }
+    """
+    if not liste_aspects_bruts:
         return {}
+
+    # --- Étape 0 : Dédoublonnage ---
+    aspects_uniques = list(set(liste_aspects_bruts))
+    logging.info(f"[REDUCE] {len(aspects_uniques)} aspects uniques à clusteriser.")
+
+    # Cas trivial : très peu d'aspects — un seul cluster suffit
+    if len(aspects_uniques) == 1:
+        label = _labelliser_cluster(aspects_uniques)
+        return {aspects_uniques[0]: label}
+
+    # --- Étape 1 : Vectorisation (Embeddings) ---
+    logging.info("[REDUCE] Étape 1/3 : Vectorisation des aspects (embeddings)...")
+    embeddings = embedding_model.encode(aspects_uniques, show_progress_bar=False)
+
+    # --- Étape 2 : Clustering KMeans ---
+    n_clusters = min(MAX_CLUSTERS, len(aspects_uniques))
+    logging.info(f"[REDUCE] Étape 2/3 : Clustering KMeans en {n_clusters} groupes...")
+    
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    labels = kmeans.fit_predict(embeddings)
+
+    # Regrouper les aspects par cluster
+    clusters: dict[int, list[str]] = {}
+    for i, aspect in enumerate(aspects_uniques):
+        cluster_id = int(labels[i])
+        clusters.setdefault(cluster_id, []).append(aspect)
+
+    logging.info(f"[REDUCE] {len(clusters)} clusters créés : {[len(v) for v in clusters.values()]} éléments chacun.")
+
+    # --- Étape 3 : Labellisation LLM par cluster ---
+    logging.info("[REDUCE] Étape 3/3 : Labellisation LLM de chaque cluster...")
+    taxonomie_finale = {}
+
+    for cluster_id, mots_du_cluster in clusters.items():
+        label = _labelliser_cluster(mots_du_cluster)
+        logging.info(f"  → Cluster {cluster_id} ({len(mots_du_cluster)} mots) → \"{label}\"")
+        
+        for aspect in mots_du_cluster:
+            taxonomie_finale[aspect] = label
+
+    logging.info(f"[REDUCE] Taxonomie générée : {len(set(taxonomie_finale.values()))} catégories macro finales.")
+    return taxonomie_finale
